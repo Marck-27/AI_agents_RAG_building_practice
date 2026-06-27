@@ -3,74 +3,135 @@ Agente IA Completo: Base de Conocimiento + Internet + Histórico
 - Tool 1: Base de Conocimiento (RAG con Supabase)
 - Tool 2: Búsqueda en Internet (Tavily)
 - Histórico: Guarda conversaciones en PostgreSQL
-
-Autor: Ing. Kevin Inofuente Colque - DataPath
 """
 
 import os
-import sys
 import uuid
 from datetime import datetime
 from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
-
-from dotenv import load_dotenv, find_dotenv
-
-load_dotenv(find_dotenv())
-
-# Agregar el directorio raíz al path para importar tools
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_postgres import PostgresChatMessageHistory
 import psycopg
 
-# Importar tools desde la carpeta tools/
-from tools.Base_de_conocimiento import buscar_datapath
+# ===========================================
+# Se asegura que se carguen las variables de entorno desde el archivo .env
+# ===========================================
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+
+# ===========================================
+# Se agrega el path raiz para poder importar los modulos de la carpeta "/tools"
+# ===========================================
+import sys
+from pathlib import Path
+
+# Path del archivo actual
+#PATH_FILE = Path.cwd() # usar con "notebooks.ipynb"
+PATH_FILE = Path(__file__).parent # usar con "scripts.py"
+print(f"Path del archivo actual: {PATH_FILE}")
+
+# Path raiz del projecto
+PATH_ROOT = str(PATH_FILE.parent.parent)
+print(f"Path raiz del proyecto: {PATH_ROOT}")
+
+# Se agrega el Path raiz para cargar módulos correctamente
+sys.path.insert(0, PATH_ROOT)
+
+# Importar tools desde la carpeta "tools/"
+from tools.Base_de_conocimiento import buscar_informacion
 from tools.Busqueda_internet import buscar_internet
 from tools.Hora_y_fecha import obtener_fecha_hora
 
 # ============================================
-# 1. CONFIGURACIÓN DE BASE DE DATOS (Histórico)
+# Carga de variables de entorno para la conexión a PostgreSQL
 # ============================================
-DB_USER = os.getenv("DB_USER")
+DB_USER     = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "postgres")
+DB_HOST     = os.getenv("DB_HOST")
+DB_PORT     = os.getenv("DB_PORT", "5432")
+DB_NAME     = os.getenv("DB_NAME", "postgres")
 
 if not all([DB_USER, DB_PASSWORD, DB_HOST]):
     raise ValueError(
         "❌ Faltan variables de base de datos en .env\n"
-        "Requeridas: DB_USER, DB_PASSWORD, DB_HOST"
+        "Requeridas: DB_USER, DB_PASSWORD, DB_HOST\n"
+        "Opcionales: DB_PORT (default: 5432), DB_NAME (default: postgres)"
     )
 
+# quote_plus maneja caracteres especiales en la contraseña (@ # $ etc.)
 DATABASE_URL = f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 print(f"🔌 Conectando como: {DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
 
+
 # ============================================
-# 2. LISTA DE TOOLS DISPONIBLES
+# CREAR TABLA DE HISTORIAL de texto en PostgreSQL
+# (Se usará para almacenar el historial de chat entre el usuario y el bot)
+# ============================================
+
+# Nombre de la tabla en supabase para almacenar el historial textual de chat User-Bot
+TBL_NAME_CHAT_USER_BOT = os.getenv("TBL_NAME_CHAT_USER_BOT")
+
+def crear_tabla_historial(table_name: str = TBL_NAME_CHAT_USER_BOT):
+    """Crea la tabla de historial en PostgreSQL si no existe."""
+    try:
+        sync_connection = psycopg.connect(DATABASE_URL)
+
+        # Se crea tabla (si no existe) con la estructura necesaria 
+        # para almacenar el historial de chat (creada por "PostgresChatMessageHistory")
+        PostgresChatMessageHistory.create_tables(sync_connection, table_name)
+        
+        sync_connection.close()
+
+        print(f"✅ Tabla '{table_name}' lista en PostgreSQL")
+    except Exception as e:
+        print(f"⚠️ Nota sobre tabla: {e}")
+
+crear_tabla_historial()
+
+# ============================================
+# FUNCIÓN QUE CARGA EL HISTÓRICO DE CONVERSACIÓN
+# ============================================
+def get_session_history(session_id: str, table_name: str = TBL_NAME_CHAT_USER_BOT) -> PostgresChatMessageHistory:
+    sync_connection = psycopg.connect(DATABASE_URL)
+    return PostgresChatMessageHistory(
+        table_name,
+        session_id,
+        sync_connection=sync_connection
+    )
+
+# ============================================
+# LISTA DE TOOLS DISPONIBLES
+# Los nombres de las tools a usar se deben referenciar en el system_prompt del agente,
+# por ejemplo: "buscar_informacion", "buscar_internet", "obtener_fecha_hora"
 # ============================================
 tools = [
-    buscar_datapath,      # Base de conocimiento DATAPATH
+    buscar_informacion,   # Base de conocimiento DATAPATH
     buscar_internet,      # Búsqueda en internet (Tavily)
     obtener_fecha_hora,   # Fecha y hora actual por zona horaria
 ]
 
 # ============================================
-# 3. CONFIGURACIÓN DEL MODELO CON TOOLS
+# CONFIGURACIÓN DEL MODELO CON TOOLS
 # ============================================
-chat = init_chat_model("gpt-4.1", temperature=0.7)
+chat = init_chat_model(
+    "gpt-4.1", 
+    temperature=0.7
+)
+
 chat_con_tools = chat.bind_tools(tools)
 
 # ============================================
-# 4. PROMPT DEL AGENTE + CONTEXTO FECHA/HORA
+# PROMPT DEL AGENTE + CONTEXTO FECHA/HORA
 # ============================================
-AGENT_TIMEZONE = os.getenv("AGENT_TIMEZONE", "America/Lima")
+AGENT_TIMEZONE = os.getenv("AGENT_TIMEZONE", "America/Lima") # si no se define, se usa Lima por defecto
 
-
+# ============================================
+# Función que genera fecha y hora actual
+# (se le agregará como contexto al agente)
+# ============================================
 def _contexto_fecha_hora() -> str:
     """Fecha y hora actual para inyectar en el system prompt (cada turno)."""
     try:
@@ -80,7 +141,9 @@ def _contexto_fecha_hora() -> str:
     now = datetime.now(tz)
     return now.strftime("%Y-%m-%d %H:%M:%S") + f" (zona {AGENT_TIMEZONE})"
 
-
+# ============================================
+# PROMPT DEL AGENTE en donde de le indica cuando usar las tools y cuando no
+# ============================================
 system_prompt = """
 <Rol>
 Eres DataBot, un asistente de IA de DATAPATH con acceso a internet.
@@ -90,63 +153,40 @@ Eres DataBot, un asistente de IA de DATAPATH con acceso a internet.
 Tu objetivo es ayudar a los usuarios respondiendo sus preguntas usando las herramientas disponibles.
 </Objetivo>
 
-Al inicio de cada turno se te indica la FECHA Y HORA ACTUAL; úsala siempre que la respuesta dependa de "hoy", "ahora", "esta semana", horarios o plazos. Para otras zonas horarias usa la tool obtener_fecha_hora.
+Al inicio de cada turno se te indica la FECHA Y HORA ACTUAL; úsala siempre que la respuesta dependa de "hoy", "ahora", "esta semana", horarios o plazos. Para otras zonas horarias utiliza la tool 'obtener_fecha_hora'.
 
 <Herramientas Disponibles>
-1. buscar_datapath: Para información sobre DATAPATH (programas, cursos, precios, docentes)
-2. buscar_internet: Para información actualizada de internet (noticias, eventos, datos actuales)
-3. obtener_fecha_hora: Para la fecha y hora actual (por defecto zona del agente; opcional otra zona, ej. America/Lima, Europe/Madrid)
+1. 'buscar_informacion': Para información sobre DATAPATH (programas, cursos, precios, docentes)
+2. 'buscar_internet': Para información actualizada de internet (noticias, eventos, datos actuales)
+3. 'obtener_fecha_hora': Para la fecha y hora actual (por defecto zona del agente; opcional otra zona, ej. America/Lima, Europe/Madrid)
 </Herramientas Disponibles
 
 INSTRUCCIONES:
-- Para preguntas sobre DATAPATH → USA buscar_datapath
-- Para preguntas sobre eventos actuales, noticias, o información general → USA buscar_internet
-- Para "qué hora es", "qué día es", "fecha actual" en tu zona → Puedes usar la FECHA Y HORA ACTUAL del contexto; para otra zona → USA obtener_fecha_hora
+- Para preguntas sobre DATAPATH → utiliza 'buscar_informacion'
+- Para preguntas sobre eventos actuales, noticias, o información general → utiliza 'buscar_internet'
+- Para "qué hora es", "qué día es", "fecha actual" en tu zona → Puedes usar la FECHA Y HORA ACTUAL del contexto; para otra zona → utiliza 'obtener_fecha_hora'
 - Para saludos, agradecimientos o conversación general → Responde directamente SIN herramientas
-- Puedes usar varias herramientas si la pregunta lo requiere
+- Puedes utilizar varias herramientas si la pregunta lo requiere
 - Recuerdas toda la conversación gracias a tu memoria persistente
 - Responde siempre en español de manera clara y amigable
 
 EJEMPLOS:
 - "Hola" → Responde directamente
-- "¿Qué cursos tienen?" → Usa buscar_datapath
-- "¿Qué pasó hoy en las noticias?" → Usa buscar_internet
-- "¿Qué hora es?" o "¿Qué día es hoy?" → Usa obtener_fecha_hora
-- "¿Cómo se compara su curso de IA con las tendencias actuales?" → Usa AMBAS tools (buscar_datapath + buscar_internet)"""
+- "¿Qué cursos tienen?" → utiliza 'buscar_informacion'
+- "¿Qué pasó hoy en las noticias?" → utiliza 'buscar_internet'
+- "¿Qué hora es?" o "¿Qué día es hoy?" → utiliza 'obtener_fecha_hora'
+- "¿Cómo se compara su curso de IA con las tendencias actuales?" → utiliza AMBAS tools ('buscar_informacion' + 'buscar_internet')"""
 
 # ============================================
-# 5. CREAR TABLA DE HISTORIAL
-# ============================================
-def crear_tabla_historial():
-    try:
-        sync_connection = psycopg.connect(DATABASE_URL)
-        PostgresChatMessageHistory.create_tables(sync_connection, "chat_history")
-        sync_connection.close()
-    except Exception as e:
-        print(f"⚠️ Nota sobre tabla: {e}")
-
-crear_tabla_historial()
-
-# ============================================
-# 6. HISTÓRICO DE CONVERSACIÓN
-# ============================================
-def get_session_history(session_id: str) -> PostgresChatMessageHistory:
-    sync_connection = psycopg.connect(DATABASE_URL)
-    return PostgresChatMessageHistory(
-        "chat_history",
-        session_id,
-        sync_connection=sync_connection
-    )
-
-# ============================================
-# 7. FUNCIÓN DE CHAT CON AGENTE + TOOLS
+# FUNCIÓN DE CHAT CON AGENTE + TOOLS
 # ============================================
 def chat_con_agente(mensaje_usuario: str, session_id: str) -> str:
     """
     Ejecuta el agente con tools y memoria.
     El agente decide si usar herramientas o responder directamente.
     """
-    # Obtener historial
+    # Carga del historial de la sesión (si existe)
+    # esto permite que el agente recuerde la conversación previa y mantenga contexto
     history = get_session_history(session_id)
     mensajes_previos = history.messages
     
@@ -210,9 +250,8 @@ def chat_con_agente(mensaje_usuario: str, session_id: str) -> str:
     
     return respuesta_final
 
-
 # ============================================
-# 8. LOOP DE CONVERSACIÓN
+# LOOP DE CONVERSACIÓN
 # ============================================
 def main():
     print("=" * 60)
@@ -245,8 +284,11 @@ def main():
     print("✅ El agente puede buscar en DATAPATH y en INTERNET")
     print("Escribe 'salir' para volver al menú.\n")
     
+    print("*" * 60)
+    print("💬 Comienza a chatear con DataBot:")
     while True:
         usuario = input("Tú: ").strip()
+        print(f"💬 Usuario: {usuario}")
         
         if usuario.lower() in ['salir', 'exit', 'quit']:
             print(f"\n💾 Tu sesión está guardada.")
@@ -262,6 +304,7 @@ def main():
             print(f"\n🤖 DataBot: {respuesta}\n")
         except Exception as e:
             print(f"\n❌ Error: {e}\n")
+
 
 # ============================================
 # MAIN

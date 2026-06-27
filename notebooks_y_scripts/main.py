@@ -2,27 +2,29 @@
 Main - Orquestador de Agentes IA
 ================================
 Punto de entrada centralizado para ejecutar cualquier agente.
-
-Autor: Ing. Kevin Inofuente Colque - DataPath
 """
 
+# ===========================================
+# Se agrega el path raiz para poder importar los modulos de la carpeta "/tools"
+# ===========================================
 import sys
-import importlib.util
 from pathlib import Path
-from dotenv import load_dotenv, find_dotenv
 
-# Cargar variables de entorno
-load_dotenv(find_dotenv())
+# Path del archivo actual
+#PATH_FILE = Path.cwd() # usar con "notebooks.ipynb"
+PATH_FILE = Path(__file__).parent # usar con "scripts.py"
+print(f"Path del archivo actual: {PATH_FILE}")
 
-# Directorio base
-BASE_DIR = Path(__file__).parent
-
+# ===========================================
+# Se crea función que importa modlulos indicando la carpeta y nombre del modulo.py
+# ===========================================
+from importlib.util import spec_from_file_location, module_from_spec
 
 def cargar_modulo(nombre_carpeta: str, nombre_archivo: str):
     """Carga un módulo Python desde una carpeta con guiones en el nombre."""
-    ruta = BASE_DIR / nombre_carpeta / nombre_archivo
-    spec = importlib.util.spec_from_file_location(nombre_archivo.replace(".py", ""), ruta)
-    modulo = importlib.util.module_from_spec(spec)
+    ruta = PATH_FILE / nombre_carpeta / nombre_archivo
+    spec = spec_from_file_location(nombre_archivo.replace(".py", ""), ruta)
+    modulo = module_from_spec(spec)
     spec.loader.exec_module(modulo)
     return modulo
 
@@ -34,9 +36,9 @@ def mostrar_menu():
     print("=" * 60)
     print("\nAgentes disponibles:\n")
     print("  A. Agente Básico (sin memoria)")
-    print("  B. Agente con Histórico de Conversación (PostgreSQL)")
-    print("  C. Agente con Base de Conocimiento (RAG + Tool)")
-    print("  D. Agente Completo (RAG + Internet + Memoria)")
+    print("  B. Agente con memoria histórica de conversación (PostgreSQL)")
+    print("  C. Agente con Base de Conocimiento (Memoria + RAG + Tool)")
+    print("  D. Agente Completo (Memoria + RAG + Tools (Fecha y Acceso a Internet)")
     print("\n  0. Salir")
     print("-" * 60)
 
@@ -54,26 +56,26 @@ def main():
                 sys.exit(0)
             
             elif opcion == "A":
-                modulo = cargar_modulo("Agente-Basico-A", "agente_basico.py")
+                modulo = cargar_modulo("02_Agente_Basico", "agente_basico.py")
                 modulo.main()
             
             elif opcion == "B":
                 modulo = cargar_modulo(
-                    "Agente-Basico-B-con-Historico-de-Conversacion", 
+                    "03_Agente_Basico_con_Memoria_Historica", 
                     "agente_basico_conversation_history.py"
                 )
                 modulo.main()
             
             elif opcion == "C":
                 modulo = cargar_modulo(
-                    "Agente-Basico-C-con-Base-de-Conocimiento-SUPABASE", 
+                    "05_Agente_con_RAG_basico", 
                     "agente_basico_hc_base_de_conocimiento.py"
                 )
                 modulo.main()
             
             elif opcion == "D":
                 modulo = cargar_modulo(
-                    "Agente-Basico-D-con-BC-HC-ToolExterna", 
+                    "06_Agente_con_RAG_multi_tools", 
                     "agente_basico_hc_bc_toolexterna.py"
                 )
                 modulo.main()

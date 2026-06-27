@@ -1,8 +1,6 @@
 """
 Integración del Agente IA con Chatwoot
 Webhook para recibir mensajes y responder automáticamente.
-
-Autor: Ing. Kevin Inofuente Colque - DataPath
 """
 
 import os

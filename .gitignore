@@ -12,3 +12,6 @@ wheels/
 # Variables de entorno (nunca subir al repositorio)
 .env
 .env.local
+
+# Claude Code
+.claude/
